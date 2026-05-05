@@ -13,12 +13,17 @@ Usage:
 Smoke test:
     python -m config.settings
 """
+
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Populate os.environ from .env so libraries that read env vars
+# directly (LangSmith, etc.) see the same config our Settings does.
+load_dotenv()
 
 # ─── Project Root ──────────────────────────────────────────
 # Computed from this file's location, so it works regardless
@@ -50,11 +55,13 @@ class Settings(BaseSettings):
     portfolio_dir: Path = PROJECT_ROOT / "data" / "portfolio"
 
     # ─── OpenAI ────────────────────────────────────────────
-    openai_api_key: str = Field(..., description="OpenAI API key from platform.openai.com")
-    llm_model: str = "gpt-4o-mini"               # default model for chains
-    judge_model: str = "gpt-4o"                  # used for LLM-as-judge in V5
+    openai_api_key: str = Field(
+        ..., description="OpenAI API key from platform.openai.com"
+    )
+    llm_model: str = "gpt-4o-mini"  # default model for chains
+    judge_model: str = "gpt-4o"  # used for LLM-as-judge in V5
     embedding_model: str = "text-embedding-3-small"
-    temperature: float = 0.0                     # deterministic by default
+    temperature: float = 0.0  # deterministic by default
 
     # ─── LangSmith ─────────────────────────────────────────
     langchain_tracing_v2: bool = True
@@ -63,7 +70,7 @@ class Settings(BaseSettings):
     langchain_endpoint: str = "https://api.smith.langchain.com"
 
     # ─── Tavily (used in V6 — Web Search Tool) ─────────────
-    tavily_api_key: str | None = None            # optional until V6
+    tavily_api_key: str | None = None  # optional until V6
 
     # ─── Retrieval Defaults (used from V3) ─────────────────
     chunk_size: int = 500
