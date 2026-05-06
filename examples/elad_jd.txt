@@ -1,0 +1,38 @@
+AI Developer — Elad Systems
+Location: Petach Tikva, Israel (Hybrid — 3 days in office)
+
+About the role:
+We are looking for a talented AI Developer to join our growing AI division.
+You will be responsible for designing, building, and deploying production-grade
+AI solutions for our enterprise clients across the financial and government
+sectors. This is a hands-on role with real ownership over the systems you build.
+
+Responsibilities:
+- Design and develop production RAG systems and LLM-based applications
+- Build and maintain agentic workflows using modern frameworks
+- Integrate AI services with existing enterprise systems via REST APIs
+- Collaborate with backend engineers, data scientists, and product managers
+- Write clean, tested, well-documented Python code
+- Participate in code reviews and architectural discussions
+
+Required qualifications:
+- 3+ years of professional Python development experience
+- Hands-on experience with LangChain or similar LLM orchestration frameworks
+- Experience building RAG (Retrieval-Augmented Generation) systems
+- Solid understanding of vector databases (pgvector, ChromaDB, Pinecone, etc.)
+- Comfortable with FastAPI for production APIs
+- Experience with PostgreSQL and SQL
+- Familiarity with Docker and Git workflows
+
+Nice to have:
+- Experience with LangGraph for agentic workflows
+- Experience with LangSmith or similar observability tooling
+- Background in deploying ML/AI systems to production
+- Hebrew language skills
+- Open-source contributions
+
+What we offer:
+- Competitive salary commensurate with experience
+- Hybrid work arrangement (3 days office, 2 days remote)
+- Modern tech stack and freedom to choose tools
+- A growing team of senior engineers focused on high-impact AI work
