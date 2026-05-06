@@ -103,31 +103,227 @@ class JobDescription(BaseModel):
     )
 
 
+# ─── V2: Intent Router ─────────────────────────────────────
+# The five intents JobFit can handle. Defined as a Literal alias so
+# we use the same set of strings everywhere (router output, dispatcher
+# keys, presentation slides). Single source of truth.
+Intent = Literal[
+    "analyze_fit",
+    "tailor_resume",
+    "generate_cover_letter",
+    "interview_prep",
+    "company_research",
+]
+
+
+class IntentClassification(BaseModel):
+    """Result of classifying a user's request against a job description.
+
+    Produced by the router chain. The `intent` field is then used by
+    the dispatcher to invoke the correct specialized handler chain.
+    """
+
+    intent: Intent = Field(
+        ...,
+        description=(
+            "Which specialized handler to invoke:\n"
+            "- 'analyze_fit': user wants a fit assessment (should I apply?)\n"
+            "- 'tailor_resume': user wants resume bullets tailored to this JD\n"
+            "- 'generate_cover_letter': user wants a cover letter for this role\n"
+            "- 'interview_prep': user wants likely interview questions\n"
+            "- 'company_research': user wants a brief on the company"
+        ),
+    )
+
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Confidence in the classification, between 0.0 and 1.0. "
+            "Below 0.6 signals an ambiguous request that may need clarification."
+        ),
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="One short sentence explaining why this intent was chosen.",
+    )
+
+
+# ─── V2: Fit Analyzer ──────────────────────────────────────
+class FitReport(BaseModel):
+    """Structured assessment of how well a candidate matches a JD."""
+
+    overall_score: int = Field(
+        ...,
+        ge=0,
+        le=100,
+        description=(
+            "Overall fit score from 0 (terrible match) to 100 (perfect match). "
+            "Calibration: 80+ = strong apply, 60-79 = apply, "
+            "40-59 = stretch, below 40 = skip."
+        ),
+    )
+
+    matched_skills: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Skills from the JD's requirements that the candidate clearly has, "
+            "based on the candidate context provided."
+        ),
+    )
+
+    gap_skills: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Skills from the JD's requirements that the candidate does NOT "
+            "have or has only weakly, based on the candidate context provided."
+        ),
+    )
+
+    strengths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specific strengths beyond skill matching that make this candidate "
+            "a strong fit (e.g. 'Has shipped production RAG systems', "
+            "'Direct experience with the company's tech stack')."
+        ),
+    )
+
+    concerns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Honest concerns or red flags about the fit "
+            "(e.g. 'Years of experience below requirement', "
+            "'No prior enterprise experience')."
+        ),
+    )
+
+    recommendation: Literal["strong_apply", "apply", "stretch", "skip"] = Field(
+        ...,
+        description=(
+            "Final recommendation, derived from overall_score:\n"
+            "- 'strong_apply' (80+): apply with high confidence\n"
+            "- 'apply' (60-79): apply, prepare for some gaps\n"
+            "- 'stretch' (40-59): consider only if highly motivated\n"
+            "- 'skip' (<40): not a good fit, look elsewhere"
+        ),
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="2-3 sentence summary justifying the recommendation.",
+    )
+
+
+# ─── V2: Cover Letter Generator ────────────────────────────
+class CoverLetter(BaseModel):
+    """A structured cover letter, broken into reusable parts."""
+
+    opening_paragraph: str = Field(
+        ...,
+        description=(
+            "The opening paragraph: hook, the role being applied for, "
+            "and one concrete reason this candidate is a strong match. "
+            "2-4 sentences."
+        ),
+    )
+
+    body_paragraphs: list[str] = Field(
+        ...,
+        description=(
+            "1-3 body paragraphs. Each paragraph should highlight one "
+            "concrete project, skill, or experience that maps directly to "
+            "the JD's requirements. Be specific — name actual technologies "
+            "and outcomes from the candidate context."
+        ),
+    )
+
+    closing_paragraph: str = Field(
+        ...,
+        description=(
+            "Closing paragraph: enthusiasm for the role, willingness to "
+            "discuss further, polite sign-off. 2-3 sentences."
+        ),
+    )
+
+    word_count: int = Field(
+        ...,
+        description="Approximate total word count across all paragraphs.",
+    )
+
+    tone: Literal["formal", "conversational", "enthusiastic"] = Field(
+        ...,
+        description=(
+            "The tone of the letter. Match it to the company's likely culture: "
+            "'formal' for traditional enterprise, 'conversational' for modern "
+            "tech companies, 'enthusiastic' for startups."
+        ),
+    )
+
+
+# ─── V2: Interview Preparation ─────────────────────────────
+class QuestionAnswer(BaseModel):
+    """A single interview question paired with a suggested answer."""
+
+    question: str = Field(..., description="The interview question.")
+    suggested_answer: str = Field(
+        ...,
+        description=(
+            "A 2-4 sentence suggested answer drawing on the candidate's "
+            "actual background. Be concrete about projects and outcomes."
+        ),
+    )
+    relevant_experience: str = Field(
+        ...,
+        description=(
+            "Which specific project, skill, or experience from the candidate's "
+            "background to reference when answering this question."
+        ),
+    )
+
+
+class InterviewPrep(BaseModel):
+    """A structured interview preparation guide for a specific JD."""
+
+    technical_questions: list[QuestionAnswer] = Field(
+        ...,
+        description=(
+            "3-5 likely technical questions specific to this role's stack. "
+            "Each with a suggested answer drawing on real candidate experience."
+        ),
+    )
+
+    behavioral_questions: list[QuestionAnswer] = Field(
+        ...,
+        description=(
+            "2-3 likely behavioral questions appropriate to the role's seniority. "
+            "Each with a suggested answer using the STAR pattern where relevant."
+        ),
+    )
+
+    questions_to_ask_them: list[str] = Field(
+        ...,
+        description=(
+            "3-5 thoughtful questions the candidate should ask the interviewer. "
+            "Should reflect genuine interest in the role and company."
+        ),
+    )
+
+
 # ─── Smoke test ────────────────────────────────────────────
 if __name__ == "__main__":
     # Run with: python -m models.schemas
-    import json
+    print("✓ All V1 + V2 schemas imported and validated successfully\n")
+    print("Available schemas:")
+    for cls in [JobDescription, IntentClassification, FitReport, CoverLetter, InterviewPrep]:
+        print(f"  • {cls.__name__:25s} ({len(cls.model_fields)} fields)")
 
-    # 1. Verify we can construct a valid instance
-    example = JobDescription(
-        title="Senior AI Developer",
-        company_name="Elad Systems",
-        seniority_level="senior",
-        years_of_experience_required=5,
-        required_skills=["Python", "LangChain", "RAG", "FastAPI", "PostgreSQL"],
-        nice_to_have_skills=["LangGraph", "Hebrew", "Docker"],
-        key_responsibilities=[
-            "Design and build production RAG systems",
-            "Lead AI architecture decisions",
-            "Mentor junior developers on LLM best practices",
-        ],
-        location="Tel Aviv, Israel",
-        work_arrangement="hybrid",
+    print("\n─── Sample IntentClassification ───")
+    sample_intent = IntentClassification(
+        intent="generate_cover_letter",
+        confidence=0.95,
+        reasoning="The user explicitly asked for a cover letter.",
     )
-
-    print("✓ JobDescription schema validated successfully\n")
-    print("─── Serialized as JSON (what your chain returns) ───")
-    print(example.model_dump_json(indent=2))
-
-    print("\n─── JSON Schema (what gets injected into LLM prompts) ───")
-    print(json.dumps(example.model_json_schema(), indent=2))
+    print(sample_intent.model_dump_json(indent=2))
