@@ -12,8 +12,8 @@ A capstone project for the LangChain & LangSmith module of the CyberPro AI Devel
 
 | Version | Concept | Status |
 |---------|---------|--------|
-| V1 | LCEL fundamentals & structured outputs | ⏳ Not started |
-| V2 | Routing & specialized handlers | ⏳ Not started |
+| V1 | LCEL fundamentals & structured outputs | ✅ Done |
+| V2 | Routing & specialized handlers | ✅ Done |
 | V3 | RAG with ChromaDB | ⏳ Not started |
 | V4 | Production architecture & FastAPI | ⏳ Not started |
 | V5 | RAG optimization & evaluation | ⏳ Not started |
