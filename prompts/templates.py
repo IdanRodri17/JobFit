@@ -12,10 +12,36 @@ The {format_instructions} placeholder is filled at chain construction time
 by LangChain's PydanticOutputParser with the auto-generated JSON Schema
 (the same schema you saw via `python -m models.schemas`).
 
+V3 update — grounding language: handler prompts that consume
+{candidate_context} now treat it as RETRIEVED context (potentially
+partial), with explicit anti-fabrication and "say I don't know"
+instructions. This is the prompt-engineering side of RAG.
+
 Smoke test:
     python -m prompts.templates
 """
 from langchain_core.prompts import ChatPromptTemplate
+
+
+# ─── Shared grounding block (V3) ───────────────────────────
+# Reused inside every handler that consumes retrieved candidate context.
+# Centralizing it means we tune RAG grounding behavior in ONE place
+# rather than across three prompts.
+GROUNDING_RULES = (
+    "GROUNDING RULES (these override any general helpfulness instinct):\n"
+    "1. The 'Retrieved Candidate Context' section below is the ONLY "
+    "source of truth about the candidate. It comes from a vector "
+    "retrieval system and may be partial.\n"
+    "2. Treat any skill, project, technology, or experience NOT in the "
+    "retrieved context as something the candidate does NOT have. Do not "
+    "fill gaps from your training data, and do not invent specifics "
+    "(metrics, dates, outcomes) that are not present in the context.\n"
+    "3. Each chunk in the context is prefixed with [Source: filename]. "
+    "When making a specific claim, you may reference the source.\n"
+    "4. If the JD asks about something the retrieved context does NOT "
+    "cover, name it explicitly as a gap or unknown — never paper over "
+    "it with generic praise.\n"
+)
 
 
 # ─── V1: Job Description Parser ────────────────────────────
@@ -95,22 +121,19 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
-# ─── V2: Fit Analyzer ──────────────────────────────────────
+# ─── V2: Fit Analyzer (V3 grounded) ────────────────────────
 FIT_ANALYZER_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are an honest, calibrated career advisor. Your job is to "
         "assess how well a candidate matches a job description and produce "
         "a structured fit report.\n\n"
+        + GROUNDING_RULES + "\n"
         "BE OBJECTIVE — your value comes from honesty, not encouragement. "
         "Resist the pull to be flattering. If the candidate has clear gaps, "
         "name them in the 'concerns' field. If years of experience fall "
         "below the requirement, that is a concern even if the candidate "
         "is talented.\n\n"
-        "GROUND EVERY CLAIM in the candidate context provided. If the "
-        "candidate context does not mention a skill listed in the JD, "
-        "treat it as a gap, not as 'might have it'. Do NOT fabricate or "
-        "infer skills that are not explicitly mentioned.\n\n"
         "SCORE CALIBRATION:\n"
         "- 80-100: strong_apply — most required skills present, relevant "
         "experience, no major gaps.\n"
@@ -128,35 +151,36 @@ FIT_ANALYZER_PROMPT = ChatPromptTemplate.from_messages([
         "--- JOB DESCRIPTION ---\n"
         "{jd_text}\n"
         "--- END JOB DESCRIPTION ---\n\n"
-        "--- CANDIDATE CONTEXT ---\n"
+        "--- RETRIEVED CANDIDATE CONTEXT ---\n"
         "{candidate_context}\n"
-        "--- END CANDIDATE CONTEXT ---"
+        "--- END RETRIEVED CANDIDATE CONTEXT ---"
     ),
 ])
 
 
-# ─── V2: Cover Letter Generator ────────────────────────────
+# ─── V2: Cover Letter Generator (V3 grounded) ──────────────
 COVER_LETTER_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are an expert cover letter writer for technical roles. Your "
         "letters are concrete, evidence-based, and never generic.\n\n"
-        "RULES:\n"
-        "1. GROUND EVERY CLAIM in the candidate context. Do NOT invent "
-        "experience, projects, or skills that are not in the context. If "
-        "the candidate context does not mention something, do not write "
-        "as if they have it.\n"
-        "2. NAME SPECIFIC PROJECTS, technologies, and outcomes from the "
-        "candidate context. Generic phrases like 'I have experience with "
+        + GROUNDING_RULES + "\n"
+        "RULES SPECIFIC TO COVER LETTERS:\n"
+        "1. NAME SPECIFIC PROJECTS, technologies, and outcomes from the "
+        "retrieved context. Generic phrases like 'I have experience with "
         "Python' are forbidden — always be specific (e.g. 'In my Multi-Source "
         "RAG Hub project, I built a LangGraph orchestration with...').\n"
-        "3. MAP CANDIDATE EXPERIENCE TO JD REQUIREMENTS. Each body paragraph "
-        "should connect a real project or skill from the candidate context "
+        "2. MAP CANDIDATE EXPERIENCE TO JD REQUIREMENTS. Each body paragraph "
+        "should connect a real project or skill from the retrieved context "
         "to a specific requirement in the JD.\n"
-        "4. KEEP IT FOCUSED. Total length 250-400 words across all "
+        "3. KEEP IT FOCUSED. Total length 250-400 words across all "
         "paragraphs. Recruiters skim — every sentence must earn its place.\n"
-        "5. MATCH THE TONE to the company. Traditional enterprise → formal. "
-        "Modern tech company → conversational. Startup → enthusiastic.\n\n"
+        "4. MATCH THE TONE to the company. Traditional enterprise → formal. "
+        "Modern tech company → conversational. Startup → enthusiastic.\n"
+        "5. METRICS RULE. Do not include specific numbers, percentages, "
+        "or quantified outcomes unless they appear in the retrieved context. "
+        "If a paragraph would benefit from a metric and none is available, "
+        "describe the achievement qualitatively instead.\n\n"
         "{format_instructions}"
     ),
     (
@@ -166,14 +190,14 @@ COVER_LETTER_PROMPT = ChatPromptTemplate.from_messages([
         "--- JOB DESCRIPTION ---\n"
         "{jd_text}\n"
         "--- END JOB DESCRIPTION ---\n\n"
-        "--- CANDIDATE CONTEXT ---\n"
+        "--- RETRIEVED CANDIDATE CONTEXT ---\n"
         "{candidate_context}\n"
-        "--- END CANDIDATE CONTEXT ---"
+        "--- END RETRIEVED CANDIDATE CONTEXT ---"
     ),
 ])
 
 
-# ─── V2: Interview Prep ────────────────────────────────────
+# ─── V2: Interview Prep (V3 grounded) ──────────────────────
 INTERVIEW_PREP_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -181,23 +205,27 @@ INTERVIEW_PREP_PROMPT = ChatPromptTemplate.from_messages([
         "anticipate likely interview questions for a specific job description "
         "and prepare the candidate to answer them using their real "
         "background.\n\n"
-        "RULES:\n"
+        + GROUNDING_RULES + "\n"
+        "RULES SPECIFIC TO INTERVIEW PREP:\n"
         "1. QUESTIONS MUST BE SPECIFIC TO THIS JD'S STACK AND DOMAIN. Do "
         "not produce generic questions like 'Tell me about yourself' (the "
         "candidate has heard those a thousand times). Produce questions an "
-        "interviewer for THIS role would actually ask, e.g. 'Walk me through "
-        "how you would design a RAG system for a 10M-document corpus' for "
-        "an AI Developer role.\n"
-        "2. SUGGESTED ANSWERS MUST DRAW ON THE CANDIDATE CONTEXT. Reference "
+        "interviewer for THIS role would actually ask.\n"
+        "2. SUGGESTED ANSWERS MUST DRAW ON THE RETRIEVED CONTEXT. Reference "
         "specific projects, outcomes, and technologies the candidate has "
-        "actually used.\n"
-        "3. CALIBRATE TO SENIORITY. For senior roles, lean into "
+        "actually used. If the retrieved context does not contain relevant "
+        "experience for a question, prefer asking a different question over "
+        "fabricating an answer.\n"
+        "3. METRICS RULE. Do not invent specific numbers, percentages, or "
+        "quantified outcomes in suggested answers. If the retrieved context "
+        "does not contain a metric, give a qualitative answer.\n"
+        "4. CALIBRATE TO SENIORITY. For senior roles, lean into "
         "architectural and trade-off questions. For junior roles, focus on "
         "fundamentals and learning ability.\n"
-        "4. BEHAVIORAL QUESTIONS should follow STAR (Situation, Task, "
+        "5. BEHAVIORAL QUESTIONS should follow STAR (Situation, Task, "
         "Action, Result) where appropriate, and pull real situations from "
-        "the candidate context.\n"
-        "5. QUESTIONS_TO_ASK_THEM should reflect genuine interest — about "
+        "the retrieved context.\n"
+        "6. QUESTIONS_TO_ASK_THEM should reflect genuine interest — about "
         "the team's tech stack, the role's first 90 days, or specific "
         "products. Avoid generic 'What's the culture like?' filler.\n\n"
         "{format_instructions}"
@@ -209,16 +237,15 @@ INTERVIEW_PREP_PROMPT = ChatPromptTemplate.from_messages([
         "--- JOB DESCRIPTION ---\n"
         "{jd_text}\n"
         "--- END JOB DESCRIPTION ---\n\n"
-        "--- CANDIDATE CONTEXT ---\n"
+        "--- RETRIEVED CANDIDATE CONTEXT ---\n"
         "{candidate_context}\n"
-        "--- END CANDIDATE CONTEXT ---"
+        "--- END RETRIEVED CANDIDATE CONTEXT ---"
     ),
 ])
 
 
 # ─── Smoke test ────────────────────────────────────────────
 if __name__ == "__main__":
-    # Verify all templates load cleanly and report their input variables.
     templates = {
         "JD_PARSER_PROMPT": JD_PARSER_PROMPT,
         "ROUTER_PROMPT": ROUTER_PROMPT,
@@ -231,15 +258,16 @@ if __name__ == "__main__":
     for name, tmpl in templates.items():
         print(f"  • {name:25s} → input variables: {tmpl.input_variables}")
 
-    print("\n─── Sample render: ROUTER_PROMPT ───\n")
-    rendered = ROUTER_PROMPT.format_messages(
-        user_request="Should I apply to this Senior AI Developer role?",
+    print("\n─── Sample render: FIT_ANALYZER_PROMPT (V3 grounded) ───\n")
+    rendered = FIT_ANALYZER_PROMPT.format_messages(
+        jd_text="[JD TEXT HERE]",
+        candidate_context="[Source: cv.md]\n[chunk content here]",
         format_instructions="[JSON Schema would be injected here]",
     )
     for i, msg in enumerate(rendered, 1):
         print(f"--- Message {i} (role: {msg.type}) ---")
         content = msg.content
-        if len(content) > 400:
-            content = content[:400] + "...[truncated]"
+        if len(content) > 800:
+            content = content[:800] + "...[truncated]"
         print(content)
         print()
