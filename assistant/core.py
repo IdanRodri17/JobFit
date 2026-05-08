@@ -1,22 +1,23 @@
-"""V2 orchestration layer: router + dispatch + candidate context.
+"""V2/V3 orchestration layer: router + dispatch + retrieval.
 
 This module is the "glue" that turns the independent router and handler
 chains into a coherent system. It does exactly three things:
 
-  1. Defines CANDIDATE_CONTEXT — the hardcoded text describing the
-     candidate. In V3 this will be replaced by RAG retrieval over a
-     real portfolio in ChromaDB. The rest of this file will not change.
+  1. Retrieves candidate context per-request via the V3 portfolio
+     retriever (ChromaDB-backed). In V2 this was a hardcoded constant
+     — now it's dynamic and query-aware.
 
   2. Maps each intent to its handler chain via dict dispatch — a
-     declarative routing table. Adding new handlers later is a one-line
-     change.
+     declarative routing table. Adding new handlers later is a
+     one-line change.
 
   3. Exposes process_request() — the single public entry point. Given
-     a JD and a user request, it routes to the right handler and
-     returns the structured result.
+     a JD and a user request, it routes to the right handler with
+     freshly-retrieved context and returns the structured result.
 
 Smoke test:
     python -m assistant.core
+    (pre-requisite: run `python -m ingestion.portfolio_ingest` once first)
 """
 from typing import Callable
 
@@ -30,69 +31,12 @@ from models.schemas import (
     IntentClassification,
     InterviewPrep,
 )
-
-
-# ─── Candidate Context (V2 — hardcoded; V3 — RAG-retrieved) ────────
-# This is the "candidate side" of every (JD, candidate) pair. In V2 it
-# is a single string passed to every handler. In V3 we will replace
-# this with a retriever that fetches the most relevant portfolio
-# chunks per query — but the handler chains will not change, because
-# they consume `candidate_context` as a string either way.
-CANDIDATE_CONTEXT = """\
-Idan — AI Developer
-
-Background:
-- B.Sc. in Computer Science with Machine Learning specialization
-  (Holon Institute of Technology, Israel)
-- Currently completing the CyberPro AI Developer Bootcamp at ELAD Software
-- Native Hebrew speaker; fluent English
-- ~1 year of relevant project experience in production AI development
-
-Recent flagship projects:
-
-1. Multi-Source RAG Knowledge Hub
-   Production-grade Retrieval-Augmented Generation system. Built across
-   four phases: (1) FastAPI + PostgreSQL/pgvector + Redis backend;
-   (2) LangGraph agentic orchestration with router/retriever/grader/
-   generator nodes and a retry loop; (3) LLM provider abstraction layer
-   supporting OpenAI and Ollama via factory pattern; (4) full test suite,
-   GitHub Actions CI/CD pipeline, and Prometheus/Grafana monitoring stack.
-   Stack: FastAPI, PostgreSQL, pgvector, Redis, LangGraph, GitHub Actions,
-   Prometheus, Grafana, Docker.
-
-2. ShelfGuard (ELAD Software 24-hour hackathon, April 2026)
-   AI shelf gap detection system using GPT-4o to compare baseline vs.
-   current shelf photos. pgvector stores product embeddings for
-   similarity-based substitute suggestions (e.g., milk gap → dairy
-   substitutes). Idan led AI/Backend on a 4-person team.
-   Stack: FastAPI, React, PostgreSQL/pgvector, Redis, Docker, GPT-4o.
-
-3. PokerScan / PokerVision
-   YOLOv8 card detection app deployed to Hugging Face Spaces and Netlify.
-   Stack: YOLOv8, Python, React, FastAPI.
-
-4. DocTor (דוקתור)
-   Hospital management system in active development. Stack: PostgreSQL,
-   SQLAlchemy ORM, CLI, FastAPI, React frontend.
-
-Tech stack summary:
-- Languages: Python (advanced), Kotlin
-- Backend: FastAPI, SQLAlchemy
-- Databases: PostgreSQL, pgvector, Redis, MongoDB
-- AI/ML: LangChain, LangGraph, OpenAI, Ollama, YOLOv8, ResNet,
-  transfer learning
-- Infra: Docker, GitHub Actions, Prometheus, Grafana, Render
-- Other: React (basics), n8n automation
-"""
+from retrieval.portfolio_retriever import get_relevant_context
 
 
 # ─── Dispatch Table ────────────────────────────────────────────────
 # Maps each Intent to the function that handles it.
 # Each handler has the signature: (jd_text: str, candidate_context: str) -> SomeSchema.
-#
-# Intents not yet implemented (tailor_resume, company_research) are
-# absent from this dict; process_request handles them with a friendly
-# "not implemented" message.
 HandlerFunc = Callable[[str, str], FitReport | CoverLetter | InterviewPrep]
 
 HANDLERS: dict[str, HandlerFunc] = {
@@ -100,6 +44,18 @@ HANDLERS: dict[str, HandlerFunc] = {
     "generate_cover_letter": generate_cover_letter,
     "interview_prep": prepare_interview,
 }
+
+
+# ─── Retrieval helper ──────────────────────────────────────────────
+def _build_retrieval_query(jd_text: str, user_request: str) -> str:
+    """Build the query string used to retrieve relevant portfolio chunks.
+
+    V3 baseline: concatenate JD text and user request. The JD provides
+    semantic grounding (skills, tech, role context), and the user
+    request adds intent specificity. V5 will replace this with a
+    dedicated query_rewriter chain.
+    """
+    return f"{user_request}\n\n{jd_text}"
 
 
 # ─── Public API ────────────────────────────────────────────────────
@@ -135,15 +91,18 @@ def process_request(
         )
         return classification, result
 
-    # Step 3: run the handler with the JD and candidate context
-    result = handler(jd_text, CANDIDATE_CONTEXT)
+    # Step 3: retrieve relevant candidate context from the portfolio
+    # via ChromaDB. This is the V3 swap — V2 used a hardcoded constant.
+    retrieval_query = _build_retrieval_query(jd_text, user_request)
+    candidate_context = get_relevant_context(retrieval_query)
+
+    # Step 4: run the handler with the JD and retrieved context
+    result = handler(jd_text, candidate_context)
     return classification, result
 
 
 # ─── Smoke test ────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # End-to-end test: same JD, three different user requests.
-    # Each call: 1 router call + 1 handler call ≈ 2 OpenAI requests.
     sample_jd = """\
 AI Developer — Elad Systems (Tel Aviv, Hybrid)
 
@@ -162,7 +121,7 @@ Nice to have:
         "Should I apply to this role?",
         "Write me a cover letter for this position.",
         "What might they ask me in the interview?",
-        "Tailor my resume for this JD.",  # not implemented — should fall through
+        "Tailor my resume for this JD.",  # not implemented — fallthrough
     ]
 
     for user_request in test_requests:
@@ -177,10 +136,8 @@ Nice to have:
         print(f"  Reasoning:  {classification.reasoning}\n")
 
         if isinstance(result, str):
-            # Unimplemented intent — friendly message
             print(f"⚠️  {result}\n")
         else:
-            # Structured result — show its type and a short preview
             schema_name = type(result).__name__
             preview = result.model_dump_json(indent=2)
             if len(preview) > 600:
