@@ -1,29 +1,27 @@
-"""V2/V3 orchestration layer: router + dispatch + retrieval.
+"""V2/V3/V5 orchestration layer: router + rewriter + retrieval + dispatch.
 
-This module is the "glue" that turns the independent router and handler
-chains into a coherent system. It does exactly three things:
+This module is the "glue" that turns the independent chains into a
+coherent system. It does exactly four things now:
 
-  1. Retrieves candidate context per-request via the V3 portfolio
-     retriever (ChromaDB-backed). In V2 this was a hardcoded constant
-     — now it's dynamic and query-aware.
-
-  2. Maps each intent to its handler chain via dict dispatch — a
-     declarative routing table. Adding new handlers later is a
-     one-line change.
-
-  3. Exposes process_request() — the single public entry point. Given
-     a JD and a user request, it routes to the right handler with
-     freshly-retrieved context and returns the structured result.
+  1. Classifies the user's intent via the V2 router.
+  2. Rewrites (jd + request) into a focused retrieval query via the
+     V5 query_rewriter chain. Replaces V3's naive concatenation.
+  3. Retrieves candidate context per-request via the V3 portfolio
+     retriever (ChromaDB-backed). Contract unchanged from V3.
+  4. Maps each intent to its handler via dict dispatch — declarative,
+     one-line addition for new handlers.
 
 Smoke test:
     python -m assistant.core
     (pre-requisite: run `python -m ingestion.portfolio_ingest` once first)
 """
+
 from typing import Callable
 
 from assistant.chains.cover_letter import generate_cover_letter
 from assistant.chains.fit_analyzer import analyze_fit
 from assistant.chains.interview_prep import prepare_interview
+from assistant.chains.query_rewriter import rewrite_query
 from assistant.router import classify_intent
 from models.schemas import (
     CoverLetter,
@@ -32,7 +30,6 @@ from models.schemas import (
     InterviewPrep,
 )
 from retrieval.portfolio_retriever import get_relevant_context
-
 
 # ─── Dispatch Table ────────────────────────────────────────────────
 # Maps each Intent to the function that handles it.
@@ -44,18 +41,6 @@ HANDLERS: dict[str, HandlerFunc] = {
     "generate_cover_letter": generate_cover_letter,
     "interview_prep": prepare_interview,
 }
-
-
-# ─── Retrieval helper ──────────────────────────────────────────────
-def _build_retrieval_query(jd_text: str, user_request: str) -> str:
-    """Build the query string used to retrieve relevant portfolio chunks.
-
-    V3 baseline: concatenate JD text and user request. The JD provides
-    semantic grounding (skills, tech, role context), and the user
-    request adds intent specificity. V5 will replace this with a
-    dedicated query_rewriter chain.
-    """
-    return f"{user_request}\n\n{jd_text}"
 
 
 # ─── Public API ────────────────────────────────────────────────────
@@ -91,10 +76,12 @@ def process_request(
         )
         return classification, result
 
-    # Step 3: retrieve relevant candidate context from the portfolio
-    # via ChromaDB. This is the V3 swap — V2 used a hardcoded constant.
-    retrieval_query = _build_retrieval_query(jd_text, user_request)
-    candidate_context = get_relevant_context(retrieval_query)
+    # Step 3: rewrite (jd_text + user_request) into a retrieval-optimized
+    # query (V5), then fetch top-k candidate chunks from ChromaDB (V3).
+    # The rewriter replaces V3's naive concatenation; the retriever
+    # contract is unchanged, so handlers below need no modification.
+    retrieval_query = rewrite_query(jd_text, user_request)
+    candidate_context = get_relevant_context(retrieval_query.query)
 
     # Step 4: run the handler with the JD and retrieved context
     result = handler(jd_text, candidate_context)
