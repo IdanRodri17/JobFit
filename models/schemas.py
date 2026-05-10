@@ -13,6 +13,7 @@ How these schemas reach the LLM:
 Smoke test:
     python -m models.schemas
 """
+
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -317,7 +318,13 @@ if __name__ == "__main__":
     # Run with: python -m models.schemas
     print("✓ All V1 + V2 schemas imported and validated successfully\n")
     print("Available schemas:")
-    for cls in [JobDescription, IntentClassification, FitReport, CoverLetter, InterviewPrep]:
+    for cls in [
+        JobDescription,
+        IntentClassification,
+        FitReport,
+        CoverLetter,
+        InterviewPrep,
+    ]:
         print(f"  • {cls.__name__:25s} ({len(cls.model_fields)} fields)")
 
     print("\n─── Sample IntentClassification ───")
@@ -327,3 +334,34 @@ if __name__ == "__main__":
         reasoning="The user explicitly asked for a cover letter.",
     )
     print(sample_intent.model_dump_json(indent=2))
+
+
+# ─── V5: Query Rewriter ────────────────────────────────────
+class RetrievalQuery(BaseModel):
+    """A retrieval-optimized search query produced by the query rewriter.
+
+    Replaces V3's naive `f"{user_request}\\n\\n{jd_text}"` concatenation
+    with a focused, keyword-dense string designed for vector search.
+    The reasoning field is what makes this debuggable in LangSmith —
+    when retrieval misses, you can see exactly what query the rewriter
+    chose and why.
+    """
+
+    query: str = Field(
+        ...,
+        description=(
+            "A concise search query optimized for vector retrieval. "
+            "Should consist of concrete skills, technologies, project "
+            "types, and domain terms — not conversational phrasing or "
+            "filler words. Aim for 5-15 high-signal keyword tokens. "
+            "Use the JD's exact capitalization (PyTorch, not pytorch)."
+        ),
+    )
+
+    reasoning: str = Field(
+        ...,
+        description=(
+            "One short sentence explaining why these terms were chosen, "
+            "referring to the JD requirements and the user's intent."
+        ),
+    )
