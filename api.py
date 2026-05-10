@@ -17,7 +17,7 @@ Then visit:
     http://localhost:8000/docs     (interactive Swagger UI)
     http://localhost:8000/redoc    (ReDoc-style API docs)
 """
-
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -34,6 +34,7 @@ from routes import frontend, health, jd, process
 # Chain-backed handlers live in routes/handlers/ — one module per V2 intent.
 from routes.handlers import analyze_fit, cover_letter, interview_prep
 
+
 logger = get_logger("jobfit.api")
 
 
@@ -43,13 +44,21 @@ async def lifespan(app: FastAPI):
     # Configure logging FIRST so the rest of the startup uses our format.
     configure_logging()
 
-    if not settings.chroma_persist_dir.exists():
+    # Allow CI / smoke-test environments to skip the ChromaDB existence
+    # check. In production (uvicorn run) this env var is unset, so the
+    # guard still fires loudly if the vector store is missing.
+    if os.getenv("JOBFIT_SKIP_CHROMA_CHECK") == "1":
+        logger.info("JOBFIT_SKIP_CHROMA_CHECK=1 -- skipping ChromaDB check")
+    elif not settings.chroma_persist_dir.exists():
         raise RuntimeError(
             f"ChromaDB not found at {settings.chroma_persist_dir}. "
             "Run `python -m ingestion.portfolio_ingest` first to "
             "build the portfolio vector store."
         )
-    logger.info("JobFit API ready -- ChromaDB at %s", settings.chroma_persist_dir)
+    else:
+        logger.info(
+            "JobFit API ready -- ChromaDB at %s", settings.chroma_persist_dir
+        )
     yield
     logger.info("JobFit API shutting down")
 
