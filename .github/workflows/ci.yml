@@ -1,0 +1,51 @@
+name: CI
+
+# Run on every push to main and every PR targeting main.
+# Manual runs are also enabled via the "Run workflow" button in the
+# Actions tab — useful for re-running CI without making a new commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run free test suite
+    runs-on: ubuntu-latest
+
+    # Environment variables visible to every step.
+    # We set fake values for the keys our code expects so config.settings
+    # doesn't blow up at import time. Real LLM calls don't happen in CI:
+    #   - REAL_LLM is unset           -> test_router.py + test_chains.py skip
+    #   - data/chroma_db not built    -> test_retriever.py + test_chains.py skip
+    #   - JOBFIT_SKIP_CHROMA_CHECK=1  -> api.py lifespan passes for test_api.py
+    # Net effect: only test_api.py's 11 tests run, ~5 seconds, $0 cost.
+    env:
+      JOBFIT_SKIP_CHROMA_CHECK: "1"
+      OPENAI_API_KEY: "sk-fake-not-used-in-ci"
+      LANGCHAIN_TRACING_V2: "false"
+      LANGCHAIN_API_KEY: "ls-fake-not-used-in-ci"
+      LANGCHAIN_PROJECT: "JobFit-CI"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        # Verbose output so the GitHub Actions log shows each test by
+        # name. Skipped tests print their reason -- useful when a
+        # contributor needs to know why something didn't run.
+        run: pytest tests/ -v
