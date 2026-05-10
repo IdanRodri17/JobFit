@@ -1,47 +1,56 @@
 """Tests for the V3 portfolio retriever (retrieval/portfolio_retriever.py).
 
-These tests are FREE — they exercise vector similarity in ChromaDB,
-not LLM calls. No opt-in env var needed; they run on every push that
-has ChromaDB built.
+These tests need real OpenAI access (for embedding calls -- not LLM
+completions) and a built ChromaDB. Both are true locally for anyone
+with v3-complete tagged + a real .env; neither is true in CI.
 
-Auto-skipped on fresh clones or in CI where data/chroma_db doesn't
-exist yet, so the suite stays green even before ingestion has run.
+Auto-skipped via @requires_real_openai whenever OPENAI_API_KEY is
+missing or fake. Local cost is ~$0.00001 per embedding call -- free
+for practical purposes.
 
-Two test classes:
-  TestRetrieverContract — basic shape/non-empty/no-crash guarantees
-  TestRetrieverHitRate  — for known-relevant queries, expected keywords
-                          appear in the retrieved context
+WHY ENV VAR INSTEAD OF FILESYSTEM CHECK:
+We originally gated on `settings.chroma_persist_dir.exists()`. That
+gate fired AFTER the module-level `from retrieval.portfolio_retriever
+import ...` line -- by which point ChromaDB's PersistentClient had
+already auto-created the directory as a side effect of import. The
+gate saw a freshly-created (empty) directory and let tests run, which
+then tried real OpenAI calls and 401'd in CI on the fake key.
 
-Hit-rate is the V5 evaluation metric in miniature: "for query X, did
-the right chunk show up?" These tests pin down a few high-confidence
-expectations so a regression in chunking, embedding, or ChromaDB
-config gets caught immediately.
-
-If a hit-rate test fails, suspect in order:
-  1. Portfolio content drifted (file removed/renamed in data/portfolio)
-  2. Chunking changed (chunk_size or overlap tweaked)
-  3. Embedding model changed
-  4. ChromaDB needs re-ingestion
+Lesson: gate on something an import can't accidentally create. Env
+vars can't be conjured by a Python import; filesystem state can.
 """
+import os
+
 import pytest
 
-from config.settings import settings
 from retrieval.portfolio_retriever import get_relevant_context
 
 
-# ─── Auto-skip if ChromaDB isn't built ─────────────────────
-# Graceful on fresh clones and CI without ingestion.
-requires_chroma = pytest.mark.skipif(
-    not settings.chroma_persist_dir.exists(),
+# --- Gate: real OpenAI access -----------------------------
+def _has_real_openai_key() -> bool:
+    """True if OPENAI_API_KEY looks like a real OpenAI key.
+
+    Catches the two CI/fresh-clone scenarios:
+      - missing/empty -> not real
+      - 'fake' substring -> CI placeholder
+    A genuinely-wrong real-shaped key would 401 at call time, which
+    is informative (test fails loudly) rather than silently skipping.
+    """
+    key = os.getenv("OPENAI_API_KEY", "")
+    return key.startswith("sk-") and "fake" not in key.lower()
+
+
+requires_real_openai = pytest.mark.skipif(
+    not _has_real_openai_key(),
     reason=(
-        f"ChromaDB not found at {settings.chroma_persist_dir}. "
-        "Run `python -m ingestion.portfolio_ingest` first."
+        "OPENAI_API_KEY is missing or fake -- retriever needs real "
+        "embeddings. Set a real key in .env to run these locally."
     ),
 )
 
 
-# ─── Contract checks ───────────────────────────────────────
-@requires_chroma
+# --- Contract checks --------------------------------------
+@requires_real_openai
 class TestRetrieverContract:
     """The retriever must always return a non-empty string for any
     plausible JD, and never crash on edge inputs.
@@ -56,21 +65,17 @@ class TestRetrieverContract:
         assert len(result) > 0
 
     def test_handles_short_query(self):
-        # Even minimal queries shouldn't crash — they may return less
+        # Even minimal queries shouldn't crash -- they may return less
         # relevant results, but the contract holds.
         result = get_relevant_context("Python")
         assert isinstance(result, str)
 
 
-# ─── Hit-rate ──────────────────────────────────────────────
-@requires_chroma
+# --- Hit-rate ---------------------------------------------
+@requires_real_openai
 class TestRetrieverHitRate:
     """For queries that are well-supported by the portfolio, verify
     the right keywords surface in the returned context.
-
-    NOTE: keywords below are picked to match Idan's portfolio
-    (Multi-Source RAG Hub mentions RAG + LangGraph; the CV mentions
-    Python). If your portfolio content changes, update these accordingly.
     """
 
     @pytest.mark.parametrize(
