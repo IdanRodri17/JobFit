@@ -3,10 +3,11 @@
 Endpoint definitions live in routes/*.py. This file is intentionally
 minimal -- its only responsibilities are:
 
-  1. Verify ChromaDB exists at startup (lifespan).
+  1. Configure logging + verify ChromaDB exists at startup (lifespan).
   2. Configure the FastAPI app, CORS middleware, static files,
      templates.
-  3. Mount the route modules from routes/.
+  3. Log every HTTP request via middleware.
+  4. Mount the route modules from routes/.
 
 Run locally:
     uvicorn api:app --reload --port 8000
@@ -17,37 +18,40 @@ Then visit:
     http://localhost:8000/redoc    (ReDoc-style API docs)
 """
 
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from config.logging import configure_logging, get_logger
 from config.settings import settings
 
 # Infrastructure + meta routes live at routes/ root.
 from routes import frontend, health, jd, process
 
 # Chain-backed handlers live in routes/handlers/ — one module per V2 intent.
-# Mirrors the assistant/chains/ layout: one file per intent, one chain
-# behind each endpoint. V6 will add tailor_resume and company_research.
 from routes.handlers import analyze_fit, cover_letter, interview_prep
+
+logger = get_logger("jobfit.api")
 
 
 # Lifespan: startup / shutdown lifecycle.
-# Verify the ChromaDB exists. If the user hasn't run ingestion yet,
-# fail fast with a clear message rather than crashing on first request.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Configure logging FIRST so the rest of the startup uses our format.
+    configure_logging()
+
     if not settings.chroma_persist_dir.exists():
         raise RuntimeError(
             f"ChromaDB not found at {settings.chroma_persist_dir}. "
             "Run `python -m ingestion.portfolio_ingest` first to "
             "build the portfolio vector store."
         )
-    print(f"OK JobFit API ready -- ChromaDB at {settings.chroma_persist_dir}")
+    logger.info("JobFit API ready -- ChromaDB at %s", settings.chroma_persist_dir)
     yield
-    # No shutdown logic needed.
+    logger.info("JobFit API shutting down")
 
 
 # App initialization.
@@ -74,8 +78,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# HTTP request logging middleware.
+# Logs every request with method, path, status code, and wall-clock
+# duration. Runs for every endpoint -- one centralized observability
+# layer instead of repeating logging in every route handler.
+@app.middleware("http")
+async def log_http_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s -> %d (%.0f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
+
 # Static files (CSS, JS) for the HTML frontend.
-# Templates live at JobFit/templates/, mounted by routes.frontend.
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Mount all routers. Order doesn't matter for correctness, but grouping
