@@ -2,8 +2,7 @@
 
 > A modular, observable LangChain assistant that analyzes job descriptions, tailors resumes, drafts grounded cover letters, and prepares interview questions — built incrementally to demonstrate the full LangChain & LangSmith stack.
 
-**Status:** 🚧 In active development — Phase 0 (repo setup)
-
+**Status:** 🚧 In active development — V4 complete (production architecture, FastAPI, tests, CI)
 ---
 
 ## What this project is
@@ -11,11 +10,11 @@
 A capstone project for the LangChain & LangSmith module of the CyberPro AI Developer Bootcamp. The assistant is built across six versions (V1–V6), each version adding one major capability and demonstrating one core concept:
 
 | Version | Concept | Status |
-|---------|---------|--------|
+| --- | --- | --- |
 | V1 | LCEL fundamentals & structured outputs | ✅ Done |
 | V2 | Routing & specialized handlers | ✅ Done |
-| V3 | RAG with ChromaDB | ⏳ Not started |
-| V4 | Production architecture & FastAPI | ⏳ Not started |
+| V3 | RAG with ChromaDB | ✅ Done |
+| V4 | Production architecture & FastAPI | ✅ Done |
 | V5 | RAG optimization & evaluation | ⏳ Not started |
 | V6 | Controlled tools & action selection | ⏳ Not started |
 
