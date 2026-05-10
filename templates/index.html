@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JobFit — AI Job Application Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1>JobFit</h1>
+    <p class="tagline">Paste a job description. Ask anything.</p>
+  </header>
+
+  <main class="container">
+    <form id="jobfit-form" class="jobfit-form" autocomplete="off">
+      <div class="field">
+        <label for="jd_text">Job description</label>
+        <textarea
+          id="jd_text"
+          name="jd_text"
+          rows="12"
+          required
+          minlength="20"
+          placeholder="Paste the full job posting here…"
+        ></textarea>
+        <small class="hint">At least 20 characters.</small>
+      </div>
+
+      <div class="field">
+        <label for="user_request">What should JobFit do?</label>
+        <input
+          type="text"
+          id="user_request"
+          name="user_request"
+          required
+          minlength="3"
+          placeholder="e.g. Should I apply? Write me a cover letter. Prep me for the interview."
+        />
+        <small class="hint">
+          Free-text intent — the V2 router decides which chain to run.
+        </small>
+      </div>
+
+      <button type="submit" id="submit-btn" class="submit-btn">Run</button>
+    </form>
+
+    <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+
+    <section id="results" class="results hidden" aria-live="polite">
+      <div id="classification-block" class="card classification-card"></div>
+      <div id="result-block" class="card result-card"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="/docs" target="_blank">API docs</a> ·
+      <a href="https://smith.langchain.com" target="_blank">LangSmith traces</a>
+    </p>
+  </footer>
+
+  <script>
+    // ── DOM references ──────────────────────────────────────────────
+    const form = document.getElementById('jobfit-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const statusEl = document.getElementById('status');
+    const resultsEl = document.getElementById('results');
+    const classBlock = document.getElementById('classification-block');
+    const resultBlock = document.getElementById('result-block');
+
+    // ── Form submission ─────────────────────────────────────────────
+    // Posts JSON to /api/process. The HTML page is just another API
+    // client — same endpoint a React UI or curl would hit.
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      setLoading(true);
+      hide(resultsEl);
+
+      const payload = {
+        jd_text: form.jd_text.value,
+        user_request: form.user_request.value,
+      };
+
+      try {
+        const resp = await fetch('/api/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        renderResponse(data);
+        showStatus('Done.', 'ok');
+        show(resultsEl);
+      } catch (err) {
+        showStatus(`Error: ${err.message}`, 'error');
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    // ── Rendering: dispatch on classification.intent ────────────────
+    // Always show the classification block first (transparency about
+    // what the router decided), then render the right result type.
+    function renderResponse(data) {
+      const { classification, result } = data;
+      classBlock.innerHTML = renderClassification(classification);
+
+      switch (classification.intent) {
+        case 'analyze_fit':
+          resultBlock.innerHTML = renderFitReport(result);
+          break;
+        case 'generate_cover_letter':
+          resultBlock.innerHTML = renderCoverLetter(result);
+          break;
+        case 'interview_prep':
+          resultBlock.innerHTML = renderInterviewPrep(result);
+          break;
+        default:
+          // tailor_resume / company_research return placeholder strings
+          // in V2-V5; full implementations land in V6.
+          resultBlock.innerHTML = renderFallback(result, classification.intent);
+      }
+    }
+
+    function renderClassification(c) {
+      const pct = Math.round(c.confidence * 100);
+      return `
+        <div class="classification-header">
+          <span class="badge intent-badge">${esc(c.intent)}</span>
+          <span class="confidence">${pct}% confident</span>
+        </div>
+        <p class="reasoning">${esc(c.reasoning)}</p>
+      `;
+    }
+
+    function renderFitReport(r) {
+      return `
+        <div class="result-header">
+          <h2>Fit Report</h2>
+          <span class="badge ${recommendationClass(r.recommendation)}">
+            ${esc(r.recommendation)}
+          </span>
+        </div>
+        <div class="score-row">
+          <div class="score-circle" style="--score: ${r.overall_score}">
+            <span>${r.overall_score}</span>
+            <small>/ 100</small>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div>
+            <h3>Matched skills</h3>
+            ${pillList(r.matched_skills, 'pill-good')}
+          </div>
+          <div>
+            <h3>Gap skills</h3>
+            ${pillList(r.gap_skills, 'pill-warn')}
+          </div>
+        </div>
+        <div class="grid-2">
+          <div>
+            <h3>Strengths</h3>
+            ${bulletList(r.strengths)}
+          </div>
+          <div>
+            <h3>Concerns</h3>
+            ${bulletList(r.concerns)}
+          </div>
+        </div>
+        <h3>Reasoning</h3>
+        <p class="reasoning">${esc(r.reasoning)}</p>
+      `;
+    }
+
+    function renderCoverLetter(r) {
+      const body = r.body_paragraphs.map(p => `<p>${esc(p)}</p>`).join('');
+      return `
+        <div class="result-header">
+          <h2>Cover Letter</h2>
+          <span class="meta">~${r.word_count} words · tone: ${esc(r.tone)}</span>
+        </div>
+        <article class="letter">
+          <p>${esc(r.opening_paragraph)}</p>
+          ${body}
+          <p>${esc(r.closing_paragraph)}</p>
+        </article>
+      `;
+    }
+
+    function renderInterviewPrep(r) {
+      return `
+        <div class="result-header">
+          <h2>Interview Prep</h2>
+        </div>
+        <h3>Technical questions</h3>
+        ${qaList(r.technical_questions)}
+        <h3>Behavioral questions</h3>
+        ${qaList(r.behavioral_questions)}
+        <h3>Questions to ask them</h3>
+        ${bulletList(r.questions_to_ask_them)}
+      `;
+    }
+
+    function renderFallback(result, intent) {
+      const text = typeof result === 'string'
+        ? result
+        : JSON.stringify(result, null, 2);
+      return `
+        <div class="result-header">
+          <h2>Result</h2>
+          <span class="meta">intent: ${esc(intent)}</span>
+        </div>
+        <pre class="fallback">${esc(text)}</pre>
+        <p class="hint">
+          This intent returns a placeholder in the current version.
+          Full implementation lands in V6.
+        </p>
+      `;
+    }
+
+    // ── Render helpers ──────────────────────────────────────────────
+    function qaList(items) {
+      if (!items?.length) return '<p class="empty">(none)</p>';
+      return '<ol class="qa-list">' + items.map(qa => `
+        <li>
+          <p class="question"><strong>Q.</strong> ${esc(qa.question)}</p>
+          <p class="answer"><strong>A.</strong> ${esc(qa.suggested_answer)}</p>
+          <p class="reference"><em>Reference: ${esc(qa.relevant_experience)}</em></p>
+        </li>
+      `).join('') + '</ol>';
+    }
+
+    function bulletList(items) {
+      if (!items?.length) return '<p class="empty">(none)</p>';
+      return '<ul>' + items.map(s => `<li>${esc(s)}</li>`).join('') + '</ul>';
+    }
+
+    function pillList(items, cls) {
+      if (!items?.length) return '<p class="empty">(none)</p>';
+      return '<div class="pills">' + items.map(s =>
+        `<span class="pill ${cls}">${esc(s)}</span>`
+      ).join('') + '</div>';
+    }
+
+    function recommendationClass(rec) {
+      switch (rec) {
+        case 'strong_apply': return 'rec-strong';
+        case 'apply':        return 'rec-good';
+        case 'stretch':      return 'rec-warn';
+        case 'skip':         return 'rec-bad';
+        default:             return '';
+      }
+    }
+
+    // ── UI helpers ──────────────────────────────────────────────────
+    function show(el) { el.classList.remove('hidden'); }
+    function hide(el) { el.classList.add('hidden'); }
+
+    function setLoading(loading) {
+      submitBtn.disabled = loading;
+      submitBtn.textContent = loading ? 'Processing…' : 'Run';
+      if (loading) {
+        showStatus('Calling /api/process — trace will appear in LangSmith.', 'loading');
+      }
+    }
+
+    function showStatus(message, kind) {
+      statusEl.textContent = message;
+      statusEl.className = `status ${kind}`;
+      show(statusEl);
+    }
+
+    // ── XSS protection ──────────────────────────────────────────────
+    // We inject LLM output into innerHTML. Real products would use
+    // textContent or a templating library; here we escape every value
+    // before it touches the DOM.
+    function esc(value) {
+      if (value == null) return '';
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+  </script>
+</body>
+</html>
