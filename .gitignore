@@ -48,3 +48,4 @@ logs/
 
 # ─── LangSmith local cache (if any) ────────────────────
 .langsmith/
+parsed.json
