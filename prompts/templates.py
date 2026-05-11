@@ -41,6 +41,11 @@ GROUNDING_RULES = (
     "4. If the JD asks about something the retrieved context does NOT "
     "cover, name it explicitly as a gap or unknown — never paper over "
     "it with generic praise.\n"
+    "5. JSON FORMATTING IS ABSOLUTE: return ONLY a valid JSON object. "
+    "NO markdown code fences. NO inline comments (`//` or `/* */`). NO "
+    "trailing commas. NO extra prose before or after the JSON. If you "
+    "need to caveat or explain, do it inside a string field like "
+    "'reasoning' or 'concerns' — never as a JSON comment.\n"
 )
 
 
