@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # ─── Retrieval Defaults (used from V3) ─────────────────
     chunk_size: int = 500
     chunk_overlap: int = 50
-    retrieval_k: int = 4
+    retrieval_k: int = 6
 
     # ─── Application Behavior ──────────────────────────────
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
