@@ -1,0 +1,12 @@
+{
+  "currency": "ILS",
+  "last_updated": "2026-05-01",
+  "source": "placeholder — illustrative ranges only, NOT live market data",
+  "role": "AI Developer (Israel)",
+  "ranges": {
+    "junior":  { "min_monthly": 14000, "max_monthly": 20000 },
+    "mid":     { "min_monthly": 22000, "max_monthly": 32000 },
+    "senior":  { "min_monthly": 32000, "max_monthly": 50000 },
+    "lead":    { "min_monthly": 45000, "max_monthly": 70000 }
+  }
+}
