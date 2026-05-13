@@ -306,6 +306,76 @@ QUERY_REWRITER_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
+# ─── V6: Action Selector ───────────────────────────────────
+ACTION_SELECTOR_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are the action selector for JobFit. Your job: classify "
+            "each user request into exactly one of three high-level action "
+            "paths, and — when the path is 'tool_use' — also pick the "
+            "specific tool to invoke.\n\n"
+            "ACTION DEFINITIONS:\n\n"
+            "1. 'direct_answer' — General career or application advice that "
+            "does NOT need to inspect the candidate's portfolio AND does NOT "
+            "need external data. The LLM can answer from training knowledge.\n"
+            "   Examples:\n"
+            "   - 'How long should a cover letter be?'\n"
+            "   - 'What's the standard tone for a thank-you email after an "
+            "interview?'\n"
+            "   - 'Should I phrase salary expectations as a range or a "
+            "single number?'\n\n"
+            "2. 'retrieval' — Anything about THIS candidate's portfolio "
+            "(CV, projects, skills, experience). The downstream V2 router "
+            "will further classify the retrieval intent.\n"
+            "   Examples:\n"
+            "   - 'Am I a good fit for this AI Developer role?'\n"
+            "   - 'Write me a cover letter for this position.'\n"
+            "   - 'What technical questions might they ask me?'\n"
+            "   - 'What RAG projects have I built?'\n\n"
+            "3. 'tool_use' — Requires deterministic computation OR external "
+            "data that the LLM cannot produce reliably. Pick the right "
+            "tool from this registry:\n\n"
+            "   - 'experience_calculator' — Math on date ranges from the "
+            "candidate's CV (years of experience, time at a role, etc.). "
+            "Use this for ANY 'how many years' question. The LLM CANNOT "
+            "do date math reliably.\n"
+            "     Examples: 'How many years of Python experience do I have?'\n"
+            "               'How long have I been working with FastAPI?'\n\n"
+            "   - 'mock_salary_lookup' — Israeli AI Developer salary ranges "
+            "by seniority. The portfolio does not contain salary data.\n"
+            "     Examples: 'What salary should I ask for?'\n"
+            "               'What's the market range for a junior AI role?'\n\n"
+            "   - 'web_search' — Recent news, current events, or company "
+            "facts not in the portfolio. Use this any time the question "
+            "involves a specific company by name, recent news, or anything "
+            "time-sensitive.\n"
+            "     Examples: 'What's the latest news about Elad Systems?'\n"
+            "               'Are they hiring in other cities?'\n\n"
+            "DISAMBIGUATION RULES:\n"
+            "- If a question CAN be answered from the portfolio, prefer "
+            "'retrieval' over 'direct_answer'. Specific evidence beats "
+            "general advice.\n"
+            "- If a question is about a SPECIFIC company by name, prefer "
+            "'tool_use' with 'web_search' even if you might have training-"
+            "data knowledge of that company. Training data is stale.\n"
+            "- If a question is math on the candidate's dates or durations, "
+            "ALWAYS use 'experience_calculator'. NO EXCEPTIONS — date math "
+            "is the LLM's known weakness.\n"
+            "- When 'action' is NOT 'tool_use', set 'tool_name' to null. "
+            "When 'action' IS 'tool_use', 'tool_name' MUST be set.\n\n"
+            "{format_instructions}",
+        ),
+        (
+            "human",
+            "Classify the following user request:\n\n"
+            "--- USER REQUEST ---\n"
+            "{user_request}\n"
+            "--- END REQUEST ---",
+        ),
+    ]
+)
+
 
 # ─── Smoke test ────────────────────────────────────────────
 if __name__ == "__main__":

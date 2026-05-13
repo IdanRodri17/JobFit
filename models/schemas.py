@@ -365,3 +365,56 @@ class RetrievalQuery(BaseModel):
             "referring to the JD requirements and the user's intent."
         ),
     )
+
+
+# ─── V6: Action Selector ───────────────────────────────────
+# The set of deterministic tools the action selector can dispatch to.
+# Adding a tool means: (a) implement assistant/tools/<name>.py,
+# (b) register it in assistant/tools/__init__.py, (c) add it here.
+# The Literal makes the binding type-safe end-to-end.
+ToolName = Literal[
+    "web_search",
+    "experience_calculator",
+    "mock_salary_lookup",
+]
+
+
+class ActionDecision(BaseModel):
+    """High-level action path chosen by the V6 action selector.
+
+    Sits ABOVE the V2 intent router. The action selector decides
+    whether the request needs portfolio retrieval at all — and if
+    so, hands off to the V2 router. If not, the request goes to a
+    direct-answer chain (no RAG) or a deterministic tool.
+    """
+
+    action: Literal["direct_answer", "retrieval", "tool_use"] = Field(
+        ...,
+        description=(
+            "Which high-level path to invoke:\n"
+            "- 'direct_answer': general advice the LLM can answer from "
+            "training data; no portfolio access, no tools.\n"
+            "- 'retrieval': portfolio-grounded request; downstream V2 "
+            "router will dispatch to the right specialized handler.\n"
+            "- 'tool_use': deterministic computation or external data "
+            "lookup; downstream tool executor will invoke 'tool_name'."
+        ),
+    )
+
+    tool_name: ToolName | None = Field(
+        default=None,
+        description=(
+            "When action='tool_use', the specific tool to call. "
+            "MUST be one of the registered tool names. "
+            "When action != 'tool_use', this MUST be null."
+        ),
+    )
+
+    reasoning: str = Field(
+        ...,
+        description=(
+            "One short sentence explaining why this action (and tool, "
+            "if applicable) was chosen. Surfaces in LangSmith traces "
+            "for debugging."
+        ),
+    )
