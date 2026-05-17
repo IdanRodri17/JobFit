@@ -1,27 +1,42 @@
-"""V2/V3/V5 orchestration layer: router + rewriter + filtered retrieval + dispatch.
+"""V2/V3/V5/V6 orchestration layer.
 
-This module is the "glue" that turns the independent chains into a
-coherent system. It does exactly four things:
+Two top-level entry points:
 
-  1. Classifies the user's intent via the V2 router.
-  2. Rewrites (jd + request) into a focused retrieval query (V5).
-  3. Retrieves candidate context with intent-aware category filtering
-     (V5) — different chains see different portfolio slices.
-  4. Maps each intent to its handler via dict dispatch.
+  process_request(jd, request)         -- V5 retrieval-only flow,
+                                          kept for HTTP API compat.
+  process_request_v6(jd, request)      -- V6 full action-selector
+                                          dispatch (this is the new one).
+
+V6 architecture:
+
+    USER REQUEST
+        │
+        ▼
+    select_action(request)  ← V6 action selector
+        │
+        ├── direct_answer → answer_directly()         → string
+        ├── retrieval     → V5 retrieval flow         → Pydantic
+        └── tool_use      → TOOLS[name](input)
+                              → synthesize_tool_response → string
 
 Smoke test:
     python -m assistant.core
-    (pre-requisite: run `python -m ingestion.portfolio_ingest` once first)
+    (pre-requisite: python -m ingestion.portfolio_ingest)
 """
 
 from typing import Callable
 
+from assistant.action_selector import select_action
 from assistant.chains.cover_letter import generate_cover_letter
+from assistant.chains.direct_answer import answer_directly
 from assistant.chains.fit_analyzer import analyze_fit
 from assistant.chains.interview_prep import prepare_interview
 from assistant.chains.query_rewriter import rewrite_query
 from assistant.router import classify_intent
+from assistant.synthesizer import synthesize_tool_response
+from assistant.tools import TOOLS
 from models.schemas import (
+    ActionDecision,
     CoverLetter,
     FitReport,
     IntentClassification,
@@ -29,7 +44,7 @@ from models.schemas import (
 )
 from retrieval.portfolio_retriever import Category, get_relevant_context
 
-# ─── Dispatch Table ────────────────────────────────────────────────
+# ─── V2 dispatch table ─────────────────────────────────────
 HandlerFunc = Callable[[str, str], FitReport | CoverLetter | InterviewPrep]
 
 HANDLERS: dict[str, HandlerFunc] = {
@@ -38,109 +53,163 @@ HANDLERS: dict[str, HandlerFunc] = {
     "interview_prep": prepare_interview,
 }
 
-
-# ─── V5: intent → category filter ──────────────────────────────────
-# Each chain is best served by a different slice of the portfolio.
-#   - analyze_fit needs comprehensive coverage (skills + languages
-#     in cv.md + concrete project evidence). No filter.
-#   - generate_cover_letter wants concrete project examples; CV
-#     boilerplate (education, languages section) just dilutes top-k.
-#   - interview_prep references real project work; same logic.
-#
-# Missing-key default via dict.get() is None (no filter), so adding
-# a new handler later without an entry here gracefully gets every
-# chunk — explicit opt-in to filtering.
+# ─── V5: intent → category filter ──────────────────────────
 INTENT_TO_CATEGORIES: dict[str, list[Category] | None] = {
-    "analyze_fit": None,  # all signal welcome
+    "analyze_fit": None,
     "generate_cover_letter": ["projects"],
     "interview_prep": ["projects"],
 }
 
 
-# ─── Public API ────────────────────────────────────────────────────
+# Type alias for V6's possible result shapes
+V6Result = str | FitReport | CoverLetter | InterviewPrep
+
+
+# ─── V5 entry point (HTTP API uses this) ───────────────────
 def process_request(
     jd_text: str,
     user_request: str,
 ) -> tuple[IntentClassification, FitReport | CoverLetter | InterviewPrep | str]:
-    """Route a user request to the correct specialized handler.
+    """V5 retrieval-only flow. Preserved for HTTP API backward compat.
 
-    Args:
-        jd_text: Raw text of the job posting.
-        user_request: What the user wants to do.
-
-    Returns:
-        A tuple of (IntentClassification, handler_result).
+    Same behavior as before V6: classify intent → rewrite → retrieve →
+    dispatch to handler. Returns (IntentClassification, result).
     """
-    # Step 1: classify the user's intent
     classification = classify_intent(user_request)
-
-    # Step 2: dispatch to the matching handler (or explain absence)
     handler = HANDLERS.get(classification.intent)
     if handler is None:
         result = (
             f"The '{classification.intent}' handler is not implemented in V2. "
             "Available handlers: analyze_fit, generate_cover_letter, "
-            "interview_prep. (tailor_resume and company_research are "
-            "planned for a later version.)"
+            "interview_prep."
         )
         return classification, result
 
-    # Step 3: rewrite the query (V5), then retrieve with intent-aware
-    # category filtering (V5). The rewriter handles 'what to look for';
-    # the category filter handles 'where to look'.
     retrieval_query = rewrite_query(jd_text, user_request)
     categories = INTENT_TO_CATEGORIES.get(classification.intent)
     candidate_context = get_relevant_context(
         retrieval_query.query,
         categories=categories,
     )
-
-    # Step 4: run the handler with the JD and retrieved context
     result = handler(jd_text, candidate_context)
     return classification, result
 
 
-# ─── Smoke test ────────────────────────────────────────────────────
+# ─── V6 entry point (new) ──────────────────────────────────
+def process_request_v6(
+    jd_text: str,
+    user_request: str,
+) -> tuple[ActionDecision, IntentClassification | None, V6Result]:
+    """V6 top-level dispatch: action selector → path-specific handler.
+
+    Args:
+        jd_text: Job description text. Used only by the retrieval path.
+        user_request: What the user wants.
+
+    Returns:
+        A 3-tuple (action, classification, result):
+          - action: ActionDecision from select_action()
+          - classification: IntentClassification when action='retrieval',
+                            else None
+          - result: string (direct_answer / tool_use) or Pydantic
+                    (retrieval path)
+    """
+    action = select_action(user_request)
+
+    if action.action == "direct_answer":
+        return action, None, answer_directly(user_request)
+
+    if action.action == "tool_use":
+        return action, None, _run_tool(action, user_request)
+
+    # action.action == "retrieval" — fall through to V5 flow
+    classification, result = process_request(jd_text, user_request)
+    return action, classification, result
+
+
+# ─── Tool-use helper ───────────────────────────────────────
+def _run_tool(action: ActionDecision, user_request: str) -> str:
+    """Dispatch action.tool_name with action.tool_input, then synthesize.
+
+    Errors in tool dispatch (unknown tool, missing input) produce a
+    user-facing error string rather than raising — the synthesizer
+    contract is 'always return a string the user can read'.
+    """
+    if action.tool_name is None or action.tool_input is None:
+        return (
+            "The action selector chose tool_use but didn't provide a "
+            "tool name or input. Try rephrasing your question."
+        )
+
+    tool_fn = TOOLS.get(action.tool_name)
+    if tool_fn is None:
+        return (
+            f"Tool {action.tool_name!r} is registered in the schema but not in TOOLS."
+        )
+
+    tool_result = tool_fn(action.tool_input)
+    return synthesize_tool_response(
+        user_request=user_request,
+        tool_name=action.tool_name,
+        tool_result=tool_result,
+    )
+
+
+# ─── Smoke test — all three V6 paths end-to-end ────────────
 if __name__ == "__main__":
     sample_jd = """\
 AI Developer — Elad Systems (Tel Aviv, Hybrid)
 
 Required:
-- 3+ years of Python development
-- Experience with LangChain and RAG systems
+- 3+ years Python development experience
+- LangChain and RAG systems
 - PostgreSQL and pgvector
 - FastAPI and Docker
 
 Nice to have:
-- LangGraph experience
+- LangGraph for agentic workflows
 - Hebrew language skills
 """
 
-    test_requests = [
+    test_cases = [
+        # direct_answer path
+        "How long should a cover letter be?",
+        # retrieval path
         "Should I apply to this role?",
-        "Write me a cover letter for this position.",
-        "What might they ask me in the interview?",
-        "Tailor my resume for this JD.",
+        # tool_use paths
+        "How many years of Python experience do I have?",
+        "What salary should I ask for as a junior AI developer?",
+        "What's the latest news about Anthropic Claude?",
     ]
 
-    for user_request in test_requests:
+    for user_request in test_cases:
         print("═" * 70)
-        print(f"USER REQUEST: {user_request!r}")
+        print(f"REQUEST: {user_request!r}")
         print("═" * 70)
 
-        classification, result = process_request(sample_jd, user_request)
+        action, classification, result = process_request_v6(sample_jd, user_request)
 
-        print(f"\n→ Routed to: {classification.intent}")
-        print(f"  Confidence: {classification.confidence:.2f}")
-        print(f"  Reasoning:  {classification.reasoning}\n")
-
-        if isinstance(result, str):
-            print(f"⚠️  {result}\n")
+        print(f"\n→ Action: {action.action}", end="")
+        if action.tool_name:
+            print(f"  |  tool: {action.tool_name}  |  input: {action.tool_input!r}")
         else:
-            schema_name = type(result).__name__
+            print()
+        print(f"  Reasoning: {action.reasoning}")
+
+        if classification:
+            print(
+                f"\n  V2 intent: {classification.intent} "
+                f"(confidence {classification.confidence:.2f})"
+            )
+
+        print(f"\n  RESULT ({type(result).__name__}):")
+        if isinstance(result, str):
+            print(f"  {result}")
+        else:
             preview = result.model_dump_json(indent=2)
             if len(preview) > 600:
                 preview = preview[:600] + "\n  ...[truncated]"
-            print(f"✓ Result ({schema_name}):")
             print(preview)
-            print()
+        print()
+
+    print("→ Open https://smith.langchain.com (project: JobFit) for the full traces")
