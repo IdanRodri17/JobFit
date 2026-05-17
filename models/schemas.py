@@ -397,7 +397,8 @@ class ActionDecision(BaseModel):
             "- 'retrieval': portfolio-grounded request; downstream V2 "
             "router will dispatch to the right specialized handler.\n"
             "- 'tool_use': deterministic computation or external data "
-            "lookup; downstream tool executor will invoke 'tool_name'."
+            "lookup; downstream tool executor will invoke 'tool_name' "
+            "with 'tool_input' as its argument."
         ),
     )
 
@@ -406,6 +407,20 @@ class ActionDecision(BaseModel):
         description=(
             "When action='tool_use', the specific tool to call. "
             "MUST be one of the registered tool names. "
+            "When action != 'tool_use', this MUST be null."
+        ),
+    )
+
+    tool_input: str | None = Field(
+        default=None,
+        description=(
+            "When action='tool_use', the single string argument passed "
+            "to the tool function. Each tool takes one string:\n"
+            "- experience_calculator: a skill/technology name "
+            "(e.g. 'Python', 'FastAPI')\n"
+            "- mock_salary_lookup: a seniority level — must be "
+            "'junior', 'mid', 'senior', or 'lead'\n"
+            "- web_search: a focused search query\n"
             "When action != 'tool_use', this MUST be null."
         ),
     )
